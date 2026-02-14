@@ -3,6 +3,9 @@ name: Windows10_22H2_amd64_Feature_update
 on: workflow_dispatch
 #on: [push, pull_request]
 
+permissions:
+  contents: write
+
 env:
   Build_VERSION: '19045.6937'
   FILE_NAME: Windows10_22H2_amd64_Feature_update
@@ -49,5 +52,6 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
-        release_name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
+        name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
         files: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
+        token: ${{ secrets.RELEASE_TOKEN || github.token }}
