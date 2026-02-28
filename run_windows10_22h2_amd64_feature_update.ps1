@@ -543,6 +543,20 @@ function delete_git_tag_best_effort {
 		return $true
 	}
 
+	if($Resp.Status_Code -eq 422)
+	{
+		$Message = ''
+		if($null -ne $Resp.Data)
+		{
+			$Message = [string]$Resp.Data.message
+		}
+
+		if($Message -eq 'Reference does not exist')
+		{
+			return $true
+		}
+	}
+
 	Write-Host "WARN: 删除 tag 失败($($Resp.Status_Code)): $Tag_Name"
 	return $false
 }
