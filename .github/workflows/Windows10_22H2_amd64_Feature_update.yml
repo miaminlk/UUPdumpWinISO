@@ -1,6 +1,13 @@
 name: Windows10_22H2_amd64_Feature_update
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      upload_artifact:
+        description: Upload Actions artifact
+        required: false
+        default: false
+        type: boolean
 #on: [push, pull_request]
 
 permissions:
@@ -42,10 +49,14 @@ jobs:
         7z a -v1950M ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z ./${{env.FILE_NAME}}/*.iso -mx=9
 
     # 上传镜像
-    - uses: actions/upload-artifact@v4
+    - name: Upload artifact (optional)
+      if: ${{ inputs.upload_artifact }}
+      uses: actions/upload-artifact@v4
+      continue-on-error: true
       with:
         name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
         path: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
+        retention-days: 1
 
     # 发布镜像
     - name: Release
