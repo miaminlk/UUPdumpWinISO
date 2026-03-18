@@ -66,4 +66,3 @@ jobs:
         name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
         files: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
         token: ${{ secrets.RELEASE_TOKEN || github.token }}
-

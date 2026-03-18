@@ -20,9 +20,31 @@ $Sync_Remote_Files = $true
 $Cleanup_Artifacts = $true
 $Cleanup_Workflow_Runs = $true
 $Cleanup_Target_Release = $true
+$Cleanup_Prefix_Releases = $true
+$Cleanup_Prefix_Releases_Keep_Last = 0
 
 $Dispatch_Workflow = $true
 $Dispatch_Input_Upload_Artifact = 'false'
+
+$Pause_At_End = $true
+if($env:UUPDUMPWINISO_NO_PAUSE -eq '1')
+{
+	$Pause_At_End = $false
+}
+
+$Open_Actions_Page = $true
+$Actions_Page_Url = 'https://github.com/miaminlk/UUPdumpWinISO/actions'
+if($env:UUPDUMPWINISO_NO_OPEN -eq '1')
+{
+	$Open_Actions_Page = $false
+}
+
+$Update_To_Latest = $true
+$Uupdump_Known_Category_Url = 'https://uupdump.net/known.php?q=category:w10-22h2'
+$Uupdump_Api_Base_Url = 'https://api.uupdump.net/listid.php'
+$Uupdump_Search_Text = 'Feature update to Windows 10, version 22H2'
+$Uupdump_Target_Arch = 'amd64'
+$Uupdump_Download_Cmd_Relative_Path = 'Windows10_22H2_amd64_Feature_update\uup_download_windows.cmd'
 
 function ini_read {
 	param(
@@ -365,6 +387,274 @@ function parse_workflow_env {
 	}
 }
 
+function try_get_latest_uupdump_build_from_known_page {
+	$Headers = @{
+		'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+		'Accept' = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+		'Accept-Language' = 'en-US,en;q=0.9'
+	}
+
+	try {
+		$Resp = Invoke-WebRequest -Uri $Uupdump_Known_Category_Url -Headers $Headers -TimeoutSec 60 -SkipHttpErrorCheck -ErrorAction Stop
+	} catch {
+		return $null
+	}
+
+	if(($null -eq $Resp) -or ($Resp.StatusCode -ne 200))
+	{
+		return $null
+	}
+
+	$Html = [string]$Resp.Content
+	if([string]::IsNullOrWhiteSpace($Html))
+	{
+		return $null
+	}
+
+	if(($Html -match 'Just a moment') -or ($Html -match 'cf-chl'))
+	{
+		return $null
+	}
+
+	$Row_Pattern = '(?s)<tr>.*?<a\s+href="selectlang\.php\?id=(?<Id>[0-9a-fA-F-]{36})">\s*(?<Title>[^<]+?)\s*</a>.*?<td\s+class="collapsing">\s*(?<Arch>[^<]+?)\s*</td>.*?<td\s+class="collapsing">\s*(?<Created>[^<]+?)\s*</td>\s*</tr>'
+	$Row_Matches = [regex]::Matches($Html, $Row_Pattern)
+	foreach($M in $Row_Matches)
+	{
+		$Title = [string]$M.Groups['Title'].Value.Trim()
+		$Uup_Id = [string]$M.Groups['Id'].Value.Trim().ToLowerInvariant()
+		$Arch = [string]$M.Groups['Arch'].Value.Trim().ToLowerInvariant()
+		$Created = [string]$M.Groups['Created'].Value.Trim()
+
+		if($Title -notlike "$Uupdump_Search_Text*")
+		{
+			continue
+		}
+
+		if(($Arch -ne 'x64') -and ($Title -notmatch '\bamd64\b'))
+		{
+			continue
+		}
+
+		$Build_Version = ''
+		if($Title -match '\((?<V>[0-9]+\.[0-9]+)\)')
+		{
+			$Build_Version = $Matches['V'].Trim()
+		}
+
+		if([string]::IsNullOrWhiteSpace($Build_Version) -or [string]::IsNullOrWhiteSpace($Uup_Id))
+		{
+			continue
+		}
+
+		return @{
+			Build_Version = $Build_Version
+			Uup_Id = $Uup_Id
+			Title = $Title
+			Created_Utc = $Created
+			Source = 'known.php'
+		}
+	}
+
+	return $null
+}
+
+function uupdump_api_listid_search {
+	param(
+		[string]$Search_Text
+	)
+
+	$Q = [System.Uri]::EscapeDataString($Search_Text)
+	$Uri = "$Uupdump_Api_Base_Url?search=$Q"
+
+	try {
+		$Resp = Invoke-RestMethod -Method 'GET' -Uri $Uri -TimeoutSec 60 -ErrorAction Stop
+	} catch {
+		throw "请求 UUP dump API 失败: $Uri ($($_.Exception.Message))"
+	}
+
+	if(($null -eq $Resp) -or ($null -eq $Resp.response))
+	{
+		throw "UUP dump API 返回空响应: $Uri"
+	}
+
+	$Builds_Object = $Resp.response.builds
+	if($null -eq $Builds_Object)
+	{
+		return @()
+	}
+
+	$Builds = @()
+	foreach($Prop in $Builds_Object.PSObject.Properties)
+	{
+		if($null -ne $Prop.Value)
+		{
+			$Builds += $Prop.Value
+		}
+	}
+
+	return $Builds
+}
+
+function get_latest_uupdump_build_for_w10_22h2_amd64_feature_update {
+	$Known = try_get_latest_uupdump_build_from_known_page
+	if($null -ne $Known)
+	{
+		return $Known
+	}
+
+	$Builds = uupdump_api_listid_search -Search_Text $Uupdump_Search_Text
+	$Targets = @(
+		$Builds | Where-Object {
+			([string]$_.arch -eq $Uupdump_Target_Arch) -and
+			([string]$_.title -like "$Uupdump_Search_Text*")
+		}
+	)
+
+	if($Targets.Count -eq 0)
+	{
+		throw "无法从 UUP dump API 找到目标条目: $Uupdump_Search_Text ($Uupdump_Target_Arch)"
+	}
+
+	$Latest = $Targets | Sort-Object -Property @(
+		@{ Expression = { try { [version]$_.build } catch { [version]'0.0' } } },
+		@{ Expression = { try { [int64]$_.created } catch { 0 } } }
+	) -Descending | Select-Object -First 1
+
+	$Build_Version = [string]$Latest.build
+	$Uup_Id = [string]$Latest.uuid
+	$Created_Utc = ''
+
+	$Created_Seconds = 0
+	if([int64]::TryParse([string]$Latest.created, [ref]$Created_Seconds))
+	{
+		try {
+			$Created_Utc = [DateTimeOffset]::FromUnixTimeSeconds($Created_Seconds).ToUniversalTime().ToString('u')
+		} catch {
+			$Created_Utc = ''
+		}
+	}
+
+	if([string]::IsNullOrWhiteSpace($Build_Version) -or [string]::IsNullOrWhiteSpace($Uup_Id))
+	{
+		throw "UUP dump API 返回的目标条目缺少 build/uuid 字段"
+	}
+
+	return @{
+		Build_Version = $Build_Version
+		Uup_Id = $Uup_Id
+		Title = [string]$Latest.title
+		Created_Utc = $Created_Utc
+		Source = 'api.uupdump.net'
+	}
+}
+
+function update_workflow_build_version_local {
+	param(
+		[string]$Workflow_Local_File,
+		[string]$New_Build_Version
+	)
+
+	$Text = Get-Content -LiteralPath $Workflow_Local_File -Raw -ErrorAction Stop
+	$Pattern = '(?m)^(\s*Build_VERSION:\s*)[\x27\x22]?[^\x27\x22\r\n]+[\x27\x22]?\s*$'
+	if(-not [regex]::IsMatch($Text, $Pattern))
+	{
+		throw "workflow YAML 中未找到 Build_VERSION: $Workflow_Local_File"
+	}
+
+	$Updated = ($Text -replace $Pattern, { "$($_.Groups[1].Value)'$New_Build_Version'" })
+	if($Updated -ne $Text)
+	{
+		Set-Content -LiteralPath $Workflow_Local_File -Value $Updated -Encoding UTF8
+		return $true
+	}
+
+	return $false
+}
+
+function update_uup_download_windows_cmd_local {
+	param(
+		[string]$Cmd_File,
+		[string]$New_Build_Version,
+		[string]$New_Uup_Id
+	)
+
+	$Text = Get-Content -LiteralPath $Cmd_File -Raw -ErrorAction Stop
+	$Updated = $Text
+	$Changed = $false
+
+	$Short_Id = ''
+	if($New_Uup_Id -match '^(?<S>[0-9a-fA-F]{8})-')
+	{
+		$Short_Id = $Matches['S'].ToLowerInvariant()
+	}
+	else
+	{
+		$Short_Id = ($New_Uup_Id -replace '[^0-9a-fA-F]', '').Substring(0, 8).ToLowerInvariant()
+	}
+
+	$Title_Pattern = '(?m)^title\s+[0-9]+\.[0-9]+_amd64_zh-cn_professional_[0-9a-fA-F]{8}\s+download\s*$'
+	$New_Title = "title ${New_Build_Version}_amd64_zh-cn_professional_${Short_Id} download"
+	if([regex]::IsMatch($Updated, $Title_Pattern))
+	{
+		$Temp_Text = $Updated -replace $Title_Pattern, $New_Title
+		if($Temp_Text -ne $Updated)
+		{
+			$Updated = $Temp_Text
+			$Changed = $true
+		}
+	}
+	else
+	{
+		$Fallback_Title_Pattern = '(?m)^title\s+.*$'
+		if([regex]::IsMatch($Updated, $Fallback_Title_Pattern))
+		{
+			$Temp_Text = $Updated -replace $Fallback_Title_Pattern, $New_Title
+			if($Temp_Text -ne $Updated)
+			{
+				$Updated = $Temp_Text
+				$Changed = $true
+			}
+		}
+		else
+		{
+			throw "无法在下载脚本中找到 title 行: $Cmd_File"
+		}
+	}
+
+	$Id_Pattern = '(?<=https://uupdump\.net/get\.php\?id=)[0-9a-fA-F-]{36}'
+	if([regex]::IsMatch($Updated, $Id_Pattern))
+	{
+		$Temp_Text = [regex]::Replace($Updated, $Id_Pattern, $New_Uup_Id)
+		if($Temp_Text -ne $Updated)
+		{
+			$Updated = $Temp_Text
+			$Changed = $true
+		}
+	}
+	else
+	{
+		throw "无法在下载脚本中找到 get.php?id=...: $Cmd_File"
+	}
+
+	if($Changed)
+	{
+		$Now_Utc = [DateTimeOffset]::Now.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+		$Generated_Pattern = '(?m)^:: Generated on .*$'
+		if([regex]::IsMatch($Updated, $Generated_Pattern))
+		{
+			$Updated = $Updated -replace $Generated_Pattern, ":: Generated on $Now_Utc GMT"
+		}
+	}
+
+	if($Updated -ne $Text)
+	{
+		Set-Content -LiteralPath $Cmd_File -Value $Updated -Encoding UTF8
+		return $true
+	}
+
+	return $false
+}
+
 function normalize_text {
 	param(
 		[string]$Text
@@ -506,7 +796,7 @@ function delete_release_by_tag_best_effort {
 	$Get = github_api_request -Method 'GET' -Uri $Get_Uri -Token $Token
 	if($Get.Status_Code -eq 404)
 	{
-		return $false
+		return $true
 	}
 
 	if($Get.Status_Code -ne 200)
@@ -524,6 +814,58 @@ function delete_release_by_tag_best_effort {
 	}
 
 	Write-Host "WARN: 删除 release 失败($($Del.Status_Code)): $Tag_Name"
+	return $false
+}
+
+function list_repo_releases_all {
+	param(
+		[string]$Repo_Full_Name,
+		[string]$Token,
+		[int]$Per_Page = 100,
+		[int]$Max_Pages = 10
+	)
+
+	$All = @()
+	for($Page = 1; $Page -le $Max_Pages; $Page++)
+	{
+		$Uri = "https://api.github.com/repos/$Repo_Full_Name/releases?per_page=$Per_Page&page=$Page"
+		$Resp = github_api_request -Method 'GET' -Uri $Uri -Token $Token
+		if($Resp.Status_Code -ne 200)
+		{
+			throw "获取 releases 失败($($Resp.Status_Code)): $Repo_Full_Name"
+		}
+
+		$Items = @($Resp.Data)
+		if($Items.Count -eq 0)
+		{
+			break
+		}
+
+		$All += $Items
+		if($Items.Count -lt $Per_Page)
+		{
+			break
+		}
+	}
+
+	return $All
+}
+
+function delete_release_by_id_best_effort {
+	param(
+		[string]$Repo_Full_Name,
+		[int64]$Release_Id,
+		[string]$Token
+	)
+
+	$Uri = "https://api.github.com/repos/$Repo_Full_Name/releases/$Release_Id"
+	$Del = github_api_request -Method 'DELETE' -Uri $Uri -Token $Token
+	if($Del.Status_Code -in 204, 404)
+	{
+		return $true
+	}
+
+	Write-Host "WARN: 删除 release 失败($($Del.Status_Code)): id=$Release_Id"
 	return $false
 }
 
@@ -589,6 +931,7 @@ function dispatch_workflow {
 	}
 }
 
+try {
 $Token = iniread $Ini_Path $Ini_Section $Ini_Key ''
 if([string]::IsNullOrWhiteSpace($Token))
 {
@@ -615,8 +958,62 @@ if(-not (Test-Path -LiteralPath $Workflow_Local_File -PathType Leaf))
 
 $Workflow_Text = Get-Content -LiteralPath $Workflow_Local_File -Raw -ErrorAction Stop
 $Workflow_Env = parse_workflow_env -Yaml_Text $Workflow_Text -Workflow_File $Workflow_File
-$Build_Version = $Workflow_Env.Build_Version
+$Current_Build_Version = $Workflow_Env.Build_Version
 $File_Name = $Workflow_Env.File_Name
+
+if($Update_To_Latest)
+{
+	$Latest = get_latest_uupdump_build_for_w10_22h2_amd64_feature_update
+	$Latest_Build_Version = [string]$Latest.Build_Version
+	$Latest_Uup_Id = [string]$Latest.Uup_Id
+
+	if(-not [string]::IsNullOrWhiteSpace([string]$Latest.Source))
+	{
+		Write-Host "UUP dump 来源: $($Latest.Source)"
+	}
+
+	Write-Host "UUP dump 最新: $($Latest.Title)"
+	if(-not [string]::IsNullOrWhiteSpace([string]$Latest.Created_Utc))
+	{
+		Write-Host "UUP dump 时间(UTC): $($Latest.Created_Utc)"
+	}
+
+	if($Current_Build_Version -ne $Latest_Build_Version)
+	{
+		if($PSCmdlet.ShouldProcess($Workflow_Local_File, "update Build_VERSION -> $Latest_Build_Version"))
+		{
+			$Is_Updated = update_workflow_build_version_local -Workflow_Local_File $Workflow_Local_File -New_Build_Version $Latest_Build_Version
+			if($Is_Updated)
+			{
+				Write-Host "已更新本地 workflow Build_VERSION: $Current_Build_Version -> $Latest_Build_Version"
+			}
+		}
+	}
+
+	$Download_Cmd = Join-Path $PSScriptRoot $Uupdump_Download_Cmd_Relative_Path
+	if(-not (Test-Path -LiteralPath $Download_Cmd -PathType Leaf))
+	{
+		throw "找不到下载脚本: $Download_Cmd"
+	}
+
+	if($PSCmdlet.ShouldProcess($Download_Cmd, "update uupdump id -> $Latest_Uup_Id"))
+	{
+		$Is_Updated = update_uup_download_windows_cmd_local -Cmd_File $Download_Cmd -New_Build_Version $Latest_Build_Version -New_Uup_Id $Latest_Uup_Id
+		if($Is_Updated)
+		{
+			Write-Host "已更新本地下载脚本: $Download_Cmd"
+		}
+		else
+		{
+			Write-Host "本地下载脚本已是最新: $Download_Cmd"
+		}
+	}
+
+	$Workflow_Text = Get-Content -LiteralPath $Workflow_Local_File -Raw -ErrorAction Stop
+	$Workflow_Env = parse_workflow_env -Yaml_Text $Workflow_Text -Workflow_File $Workflow_File
+}
+
+$Build_Version = $Workflow_Env.Build_Version
 $Release_Tag = "$File_Name-$Build_Version"
 $Name_Prefix = "$File_Name-"
 
@@ -680,6 +1077,56 @@ if($Cleanup_Artifacts)
 		{
 			Write-Host "删除 artifact: $A_Id ($($A.name))"
 			$null = delete_artifact_best_effort -Repo_Full_Name $Repo_Full_Name -Artifact_Id $A_Id -Token $Token
+		}
+	}
+}
+
+if($Cleanup_Prefix_Releases)
+{
+	$All_Releases = @()
+	try {
+		$All_Releases = list_repo_releases_all -Repo_Full_Name $Repo_Full_Name -Token $Token -Per_Page 100 -Max_Pages 10
+	} catch {
+		Write-Host "WARN: 获取 releases 失败：$($_.Exception.Message)"
+		$All_Releases = @()
+	}
+
+	$Prefix_Releases = @($All_Releases | Where-Object { [string]$_.tag_name -like "$Name_Prefix*" })
+	$To_Delete = $Prefix_Releases
+
+	if($Cleanup_Prefix_Releases_Keep_Last -lt 0)
+	{
+		$Cleanup_Prefix_Releases_Keep_Last = 0
+	}
+
+	if(($Cleanup_Prefix_Releases_Keep_Last -gt 0) -and ($Prefix_Releases.Count -gt 0))
+	{
+		$Sorted = $Prefix_Releases | Sort-Object -Property @(
+			@{ Expression = { [string]$_.published_at } },
+			@{ Expression = { [string]$_.created_at } }
+		) -Descending
+		$To_Delete = @($Sorted | Select-Object -Skip $Cleanup_Prefix_Releases_Keep_Last)
+	}
+
+	if($Prefix_Releases.Count -gt 0)
+	{
+		Write-Host "匹配 releases: $($Prefix_Releases.Count) (prefix: $Name_Prefix)"
+	}
+
+	foreach($R in $To_Delete)
+	{
+		$Tag = [string]$R.tag_name
+		$Release_Id = [int64]$R.id
+		if($PSCmdlet.ShouldProcess("release $Release_Id ($Tag)", "delete"))
+		{
+			Write-Host "删除 release: $Release_Id ($Tag)"
+			$null = delete_release_by_id_best_effort -Repo_Full_Name $Repo_Full_Name -Release_Id $Release_Id -Token $Token
+		}
+
+		if($PSCmdlet.ShouldProcess("tag $Tag", "delete"))
+		{
+			Write-Host "删除 tag: $Tag"
+			$null = delete_git_tag_best_effort -Repo_Full_Name $Repo_Full_Name -Tag_Name $Tag -Token $Token
 		}
 	}
 }
@@ -750,5 +1197,37 @@ if($Dispatch_Workflow)
 	else
 	{
 		Write-Host "提示: 稍后在 Actions 页面查看运行记录"
+	}
+}
+} finally {
+	if($Open_Actions_Page)
+	{
+		Write-Host "打开 Actions 页面: $Actions_Page_Url"
+		try {
+			Start-Process -FilePath $Actions_Page_Url | Out-Null
+		} catch {
+			Write-Host "WARN: 打开浏览器失败：$($_.Exception.Message)"
+		}
+	}
+
+	if($Pause_At_End)
+	{
+		$Is_Input_Redirected = $false
+		try {
+			$Is_Input_Redirected = [Console]::IsInputRedirected
+		} catch {
+			$Is_Input_Redirected = $false
+		}
+
+		if(-not $Is_Input_Redirected)
+		{
+			Write-Host ''
+			Write-Host '执行完毕，按 Enter 退出...'
+			try {
+				$null = Read-Host
+			} catch {
+				Write-Host 'WARN: 当前 Host 不支持暂停输入，已跳过'
+			}
+		}
 	}
 }
