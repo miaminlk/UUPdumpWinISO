@@ -1,5 +1,5 @@
 @echo off
-:: Generated on 2026-05-26 16:09:20 GMT
+:: Generated on 2026-06-12 05:54:45 GMT
 
 :: Proxy configuration
 :: If you need to configure a proxy to be able to connect to the internet,
@@ -52,7 +52,7 @@ SETLOCAL DISABLEDELAYEDEXPANSION
 goto :EOF
 
 :START_PROCESS
-title 19045.7291_amd64_zh-cn_professional_33d49e2e download
+title 19045.7417_amd64_zh-cn_professional_d54f8d1f download
 set "aria2=files\aria2c.exe"
 set "a7z=files\7zr.exe"
 set "uupConv=files\uup-converter-wimlib.7z"
@@ -78,7 +78,7 @@ echo.
 
 :DOWNLOAD_UUPS
 echo Retrieving aria2 script for the UUP set...
-"%aria2%" --no-conf --async-dns=false --console-log-level=warn --log-level=info --log="aria2_download.log" -o"%aria2Script%" --allow-overwrite=true --auto-file-renaming=false "https://uupdump.net/get.php?id=33d49e2e-ac69-4655-9534-680435ecd146&pack=zh-cn&edition=professional&aria2=2"
+"%aria2%" --no-conf --async-dns=false --console-log-level=warn --log-level=info --log="aria2_download.log" -o"%aria2Script%" --allow-overwrite=true --auto-file-renaming=false "https://uupdump.net/get.php?id=d54f8d1f-6539-4c20-8c18-47adf9c64603&pack=zh-cn&edition=professional&aria2=2"
 if %ERRORLEVEL% GTR 0 call :DOWNLOAD_ERROR & exit /b 1
 echo.
 
@@ -121,5 +121,6 @@ pause
 goto :EOF
 
 :EOF
+
 
 
