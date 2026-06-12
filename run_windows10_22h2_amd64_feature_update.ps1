@@ -548,6 +548,47 @@ function get_latest_uupdump_build_for_w10_22h2_amd64_feature_update {
 	}
 }
 
+function update_converter_windows_local {
+	param(
+		[string]$Converter_File
+	)
+
+	$Url = 'https://git.uupdump.net/uup-dump/misc/raw/branch/master/autodl_files/converter_windows'
+	$Headers = @{
+		'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+	}
+
+	Write-Host "正在从 git.uupdump.net 获取最新 UUP Converter 配置..."
+	try {
+		$Resp = Invoke-WebRequest -Uri $Url -Headers $Headers -TimeoutSec 15 -SkipHttpErrorCheck -ErrorAction Stop
+		if(($null -ne $Resp) -and ($Resp.StatusCode -eq 200)) {
+			$Remote_Content = [string]$Resp.Content
+			if(-not [string]::IsNullOrWhiteSpace($Remote_Content)) {
+				$Local_Content = ''
+				if(Test-Path -LiteralPath $Converter_File -PathType Leaf) {
+					$Local_Content = Get-Content -LiteralPath $Converter_File -Raw
+				}
+				
+				$Remote_Norm = normalize_text -Text $Remote_Content
+				$Local_Norm = normalize_text -Text $Local_Content
+				
+				if($Remote_Norm -ne $Local_Norm) {
+					Set-Content -LiteralPath $Converter_File -Value $Remote_Content -Encoding UTF8
+					Write-Host "已自动更新本地 UUP Converter 配置文件 ($Converter_File)"
+					return $true
+				} else {
+					Write-Host "本地 UUP Converter 配置文件已是最新"
+				}
+			}
+		} else {
+			Write-Host "WARN: 获取 UUP Converter 配置失败，HTTP Code: $($Resp.StatusCode)"
+		}
+	} catch {
+		Write-Host "WARN: 获取 UUP Converter 配置异常: $($_.Exception.Message)"
+	}
+	return $false
+}
+
 function update_workflow_build_version_local {
 	param(
 		[string]$Workflow_Local_File,
@@ -1009,6 +1050,12 @@ if($Update_To_Latest)
 		}
 	}
 
+	$Converter_File_Path = Join-Path $PSScriptRoot 'Windows10_22H2_amd64_Feature_update\files\converter_windows'
+	if($PSCmdlet.ShouldProcess($Converter_File_Path, "update UUP Converter config from git.uupdump.net"))
+	{
+		$null = update_converter_windows_local -Converter_File $Converter_File_Path
+	}
+
 	$Workflow_Text = Get-Content -LiteralPath $Workflow_Local_File -Raw -ErrorAction Stop
 	$Workflow_Env = parse_workflow_env -Yaml_Text $Workflow_Text -Workflow_File $Workflow_File
 }
@@ -1035,8 +1082,24 @@ if($Sync_Remote_Files)
 		$Download_Local_File = Join-Path $PSScriptRoot 'Windows10_22H2_amd64_Feature_update\uup_download_windows.cmd'
 		$null = ensure_remote_file_matches_local -Repo_Full_Name $Repo_Full_Name -Remote_Path 'Windows10_22H2_amd64_Feature_update/uup_download_windows.cmd' -Local_File $Download_Local_File -Branch $Default_Branch -Token $Token -Commit_Message "Update uup_download_windows.cmd (Windows10_22H2_amd64_Feature_update)"
 
+		$Converter_Windows_Local_File = Join-Path $PSScriptRoot 'Windows10_22H2_amd64_Feature_update\files\converter_windows'
+		$null = ensure_remote_file_matches_local -Repo_Full_Name $Repo_Full_Name -Remote_Path 'Windows10_22H2_amd64_Feature_update/files/converter_windows' -Local_File $Converter_Windows_Local_File -Branch $Default_Branch -Token $Token -Commit_Message "Update converter_windows (Windows10_22H2_amd64_Feature_update)"
+
 		$Remote_Workflow = get_remote_file -Repo_Full_Name $Repo_Full_Name -Remote_Path $Workflow_Path -Branch $Default_Branch -Token $Token
 		$Remote_Workflow_Ready = (normalize_text -Text $Remote_Workflow.Text) -eq (normalize_text -Text $Workflow_Text)
+
+		if($Remote_Workflow_Ready) {
+			try {
+				if($PSCmdlet.ShouldProcess("Local Git repository", "fetch and reset to origin/$Default_Branch")) {
+					Write-Host "同步远端文件成功。更新本地 Git 仓库以同步历史记录..."
+					& git fetch origin 2>$null
+					& git reset --hard "origin/$Default_Branch" 2>$null
+					Write-Host "本地 Git 仓库已成功同步到最新提交"
+				}
+			} catch {
+				Write-Host "WARN: 更新本地 Git 仓库失败: $($_.Exception.Message)"
+			}
+		}
 	} catch {
 		Write-Host "WARN: 同步远端文件失败：$($_.Exception.Message)"
 		$Remote_Workflow_Ready = $false
