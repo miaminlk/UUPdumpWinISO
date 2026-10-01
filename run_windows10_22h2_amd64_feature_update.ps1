@@ -1074,6 +1074,12 @@ if($Sync_Remote_Files)
 {
 	$Remote_Workflow_Ready = $false
 	try {
+		foreach($Workflow_Script_Path in @('.github/scripts/check_windows10_22h2_update.ps1', '.github/scripts/prepare_windows10_22h2_build.ps1'))
+		{
+			$Workflow_Script_Local_File = Join-Path $PSScriptRoot $Workflow_Script_Path
+			$null = ensure_remote_file_matches_local -Repo_Full_Name $Repo_Full_Name -Remote_Path $Workflow_Script_Path -Local_File $Workflow_Script_Local_File -Branch $Default_Branch -Token $Token -Commit_Message "Update workflow script: $Workflow_Script_Path"
+		}
+
 		$null = ensure_remote_file_matches_local -Repo_Full_Name $Repo_Full_Name -Remote_Path $Workflow_Path -Local_File $Workflow_Local_File -Branch $Default_Branch -Token $Token -Commit_Message "Update workflow: $Workflow_File"
 
 		$Convert_Local_File = Join-Path $PSScriptRoot 'Windows10_22H2_amd64_Feature_update\ConvertConfig.ini'

@@ -1,14 +1,24 @@
 name: Windows10_22H2_amd64_Feature_update
 
 on:
+  schedule:
+    - cron: '23 0 * * *'
   workflow_dispatch:
     inputs:
+      force_build:
+        description: Rebuild even if the latest version is already published
+        required: false
+        default: false
+        type: boolean
       upload_artifact:
         description: Upload Actions artifact
         required: false
         default: false
         type: boolean
-#on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -18,14 +28,44 @@ env:
   FILE_NAME: Windows10_22H2_amd64_Feature_update
 
 jobs:
+  check_update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      should_build: ${{ steps.check_update.outputs.should_build }}
+      build_version: ${{ steps.check_update.outputs.build_version }}
+      uup_id: ${{ steps.check_update.outputs.uup_id }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Check UUP dump for updates
+      id: check_update
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+        FORCE_BUILD: ${{ inputs.force_build || false }}
+      run: ./.github/scripts/check_windows10_22h2_update.ps1 -repo_full_name $env:GITHUB_REPOSITORY -current_build_version $env:Build_VERSION -force_build:($env:FORCE_BUILD -eq 'true')
+
   Windows10_22H2_amd64_Feature_update:
+    needs: check_update
+    if: ${{ needs.check_update.outputs.should_build == 'true' }}
     runs-on: windows-latest
+    env:
+      LATEST_BUILD_VERSION: ${{ needs.check_update.outputs.build_version }}
+      LATEST_UUP_ID: ${{ needs.check_update.outputs.uup_id }}
 
     steps:
 
     # 检出本仓库
     - name: Checkout repository
       uses: actions/checkout@v5
+
+    - name: Prepare latest UUP build and converter
+      shell: pwsh
+      run: ./.github/scripts/prepare_windows10_22h2_build.ps1 -build_version $env:LATEST_BUILD_VERSION -uup_id $env:LATEST_UUP_ID
 
     # 制作ISO
     - name: UUP dump WinISO
@@ -44,9 +84,18 @@ jobs:
 
     # 打包
     - name: Package binaries
+      shell: pwsh
       run: |
-        #ls     #Directory: D:\a\UUPdumpWinISO\UUPdumpWinISO(即仓库目录)
-        7z a -v1950M ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z ./${{env.FILE_NAME}}/*.iso -mx=9
+        $iso_files = @(Get-ChildItem -LiteralPath $env:FILE_NAME -Filter '*.iso' -File)
+        if($iso_files.Count -eq 0)
+        {
+        	throw 'The UUP converter did not create an ISO.'
+        }
+        7z a -v1950M "$env:FILE_NAME-$env:Build_VERSION.7z" "./$env:FILE_NAME/*.iso" -mx=9
+        if($LASTEXITCODE -ne 0)
+        {
+        	throw "7-Zip failed with exit code $LASTEXITCODE."
+        }
 
     # 上传镜像
     - name: Upload artifact (optional)
@@ -62,10 +111,23 @@ jobs:
     - name: Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
-        name: ${{env.FILE_NAME}}-${{env.Build_VERSION}}
-        files: ${{env.FILE_NAME}}-${{env.Build_VERSION}}.7z*
+        tag_name: ${{ env.FILE_NAME }}-${{ env.Build_VERSION }}
+        name: ${{ env.FILE_NAME }}-${{ env.Build_VERSION }}
+        files: ${{ env.FILE_NAME }}-${{ env.Build_VERSION }}.7z*
+        draft: true
+        fail_on_unmatched_files: true
         token: ${{ secrets.RELEASE_TOKEN || github.token }}
+
+    - name: Publish completed release
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+      run: |
+        gh release edit "$env:FILE_NAME-$env:Build_VERSION" --repo $env:GITHUB_REPOSITORY --draft=false
+        if($LASTEXITCODE -ne 0)
+        {
+        	throw 'Failed to publish the completed release.'
+        }
 
 
 

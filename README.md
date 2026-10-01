@@ -34,3 +34,11 @@
 - 将`UUP dump`网站上得到的脚本上传到仓库，利用Github Actions自动生成ISO镜像
 - 将本地运行`UUP dump`脚本改为远程运行，不耗时、不耗CPU、不耗硬盘，坐等远程完成后下载即可
 - 支持同时运行多个制作任务
+
+## Windows 10 22H2 每日自动构建
+- `Windows10_22H2_amd64_Feature_update` 每天北京时间 08:23（UTC 00:23）检查 UUP dump 的 Windows 10 22H2 amd64 功能更新。
+- 检查任务通过 `api.uupdump.net/listid.php` 获取最新版本，并与本仓库已发布且包含镜像分卷的 Release 比较。没有新版本时跳过 Windows 构建；尚未成功发布的版本会在下一次检查时重试。
+- 构建前自动更新下载脚本中的 UUP ID、镜像版本号和带 SHA256 校验的转换器下载清单，并添加 UUP dump 官方 Git 仓库的备用下载地址，避免主站文件更新滞后导致 404。所有分卷上传成功后才将 Release 从草稿发布。
+- 保留手动运行入口：勾选 `force_build` 可重新构建已发布版本，`upload_artifact` 可额外上传 Actions artifact。默认仅发布 Release。
+- `run_windows10_22h2_amd64_feature_update.ps1` 同步远端文件时包含每日检查和构建准备脚本。其他 Windows 工作流仍采用手动运行。
+- 工作流和两个 `.github/scripts/*.ps1` 脚本须一并推送到默认分支后定时任务才会生效；GitHub 的定时执行可能延迟，参见 [GitHub Actions 定时事件说明](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)。
