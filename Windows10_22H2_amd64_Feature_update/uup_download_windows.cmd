@@ -58,13 +58,14 @@ set "a7z=files\7zr.exe"
 set "uupConv=files\uup-converter-wimlib.7z"
 set "aria2Script=files\aria2_script.%random%.txt"
 set "destDir=UUPs"
+set "uup_retry_count=0"
 
-powershell -NoProfile -ExecutionPolicy Unrestricted .\files\get_aria2.ps1 || (pause & exit /b 1)
+powershell -NoProfile -ExecutionPolicy Unrestricted .\files\get_aria2.ps1 || exit /b 1
 echo.
 
 echo Downloading the UUP converter...
 "%aria2%" --no-conf --async-dns=false --console-log-level=warn --log-level=info --log="aria2_download.log" -x16 -s16 -j2 -c -R -d"files" -i"files\converter_windows"
-if %ERRORLEVEL% GTR 0 call :DOWNLOAD_CONVERTER_ERROR & exit /b 1
+if errorlevel 1 goto :DOWNLOAD_CONVERTER_ERROR
 echo.
 
 if NOT EXIST ConvertConfig.ini goto :NO_FILE_ERROR
@@ -74,51 +75,51 @@ if NOT EXIST %uupConv% goto :NO_FILE_ERROR
 
 echo Extracting UUP converter...
 "%a7z%" -x!ConvertConfig.ini -x!CustomAppsList.txt -y x "%uupConv%" >NUL
+if errorlevel 1 goto :DOWNLOAD_CONVERTER_ERROR
 echo.
 
 :DOWNLOAD_UUPS
+set /a uup_retry_count+=1 >NUL
+set "DETECTED_ERROR="
 echo Retrieving aria2 script for the UUP set...
 "%aria2%" --no-conf --async-dns=false --console-log-level=warn --log-level=info --log="aria2_download.log" -o"%aria2Script%" --allow-overwrite=true --auto-file-renaming=false "https://uupdump.net/get.php?id=f2a3c168-f4ea-4b8c-9ec7-ff42e1d78ab4&pack=zh-cn&edition=professional&aria2=2"
-if %ERRORLEVEL% GTR 0 call :DOWNLOAD_ERROR & exit /b 1
+if errorlevel 1 goto :RETRY_UUP_REQUEST
 echo.
 
 for /F "tokens=2 delims=:" %%i in ('findstr #UUPDUMP_ERROR: "%aria2Script%"') do set DETECTED_ERROR=%%i
-if NOT [%DETECTED_ERROR%] == [] (
+if defined DETECTED_ERROR (
     echo Unable to retrieve data from Windows Update servers. Reason: %DETECTED_ERROR%
-    echo If this problem persists, most likely the set you are attempting to download was removed from Windows Update servers.
-    echo.
-    pause
-    goto :EOF
+	goto :RETRY_UUP_REQUEST
 )
 
 echo Downloading the UUP set...
 "%aria2%" --no-conf --async-dns=false --console-log-level=warn --log-level=info --log="aria2_download.log" -x16 -s16 -j5 -c -R -d"%destDir%" -i"%aria2Script%"
-if %ERRORLEVEL% GTR 0 goto :DOWNLOAD_UUPS & exit /b 1
+if errorlevel 1 goto :RETRY_UUP_REQUEST
 
 if EXIST convert-UUP.cmd goto :START_CONVERT
-pause
-goto :EOF
+goto :NO_FILE_ERROR
+
+:RETRY_UUP_REQUEST
+if %uup_retry_count% GEQ 4 (
+	echo Failed to download the UUP set after %uup_retry_count% attempts.
+	exit /b 1
+)
+echo Retrying the UUP request in 30 seconds...
+powershell -NoProfile -Command "Start-Sleep -Seconds 30"
+goto :DOWNLOAD_UUPS
 
 :START_CONVERT
 call convert-UUP.cmd
-goto :EOF
+exit /b %ERRORLEVEL%
 
 :NO_FILE_ERROR
 echo We couldn't find one of needed files for this script.
-pause
-goto :EOF
+exit /b 1
 
 :DOWNLOAD_CONVERTER_ERROR
 echo.
 echo An error has occurred while downloading the UUP converter.
-pause
-goto :EOF
-
-:DOWNLOAD_ERROR
-echo.
-echo We have encountered an error while downloading files.
-pause
-goto :EOF
+exit /b 1
 
 :EOF
 
