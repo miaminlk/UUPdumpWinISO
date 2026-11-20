@@ -38,6 +38,7 @@
 ## Windows 10 22H2 每日自动构建
 - `Windows10_22H2_amd64_Feature_update` 每天北京时间 08:23（UTC 00:23）检查 UUP dump 的 Windows 10 22H2 amd64 功能更新。
 - 检查任务通过 `api.uupdump.net/listid.php` 获取最新版本，并与本仓库已发布且包含镜像分卷的 Release 比较。没有新版本时跳过 Windows 构建；尚未成功发布的版本会在下一次检查时重试。
+- 版本查询单次限时 45 秒。遇到超时、HTTP 429 或 503 等临时错误时，最多再试 3 次。仍无法取得清单时，本次检查报错，下次定时检查会重新查询。
 - 构建前自动更新下载脚本中的 UUP ID、镜像版本号和带 SHA256 校验的转换器下载清单，并添加 UUP dump 官方 Git 仓库的备用下载地址，避免主站文件更新滞后导致 404。所有分卷上传成功后才将 Release 从草稿发布。
 - 下载清单返回 `XML_PARSE_ERROR` 等 UUP dump 错误或下载失败时，每隔 30 秒重试，最多尝试 4 次；仍失败则在下载步骤报错退出，不再误报成功后进入打包。
 - 保留手动运行入口：勾选 `force_build` 可重新构建已发布版本，`upload_artifact` 可额外上传 Actions artifact。默认仅发布 Release。

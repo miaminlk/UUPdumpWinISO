@@ -15,7 +15,22 @@ $ErrorActionPreference = 'Stop'
 $file_name = 'Windows10_22H2_amd64_Feature_update'
 $search_text = 'Feature update to Windows 10, version 22H2'
 $search_query = [Uri]::EscapeDataString($search_text)
-$response = Invoke-RestMethod -Uri "https://api.uupdump.net/listid.php?search=$search_query" -TimeoutSec 45 -MaximumRetryCount 3 -RetryIntervalSec 5
+$catalog_url = "https://api.uupdump.net/listid.php?search=$search_query"
+# curl can discard a partial response before retrying when writing to a file.
+$catalog_file = New-TemporaryFile
+try
+{
+	curl --disable --no-progress-meter --fail --location --max-time 45 --retry 3 --retry-delay 5 --retry-max-time 210 --output $catalog_file.FullName $catalog_url
+	if($LASTEXITCODE -ne 0)
+	{
+		throw "Could not retrieve the UUP dump build list (curl exit code $LASTEXITCODE)."
+	}
+	$response = Get-Content -LiteralPath $catalog_file.FullName -Raw -Encoding utf8 | ConvertFrom-Json
+}
+finally
+{
+	Remove-Item -LiteralPath $catalog_file.FullName
+}
 if(($null -eq $response.response.builds) -or $response.response.error)
 {
 	throw "UUP dump did not return a build list: $($response.response.error)"
